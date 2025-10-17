@@ -1,4 +1,6 @@
-WITH sales_external AS (
+WITH
+
+sales_external AS (
   SELECT
     sia.SUBSIDIARYID AS filial,
     ca.customertype  AS sales_type,
@@ -16,6 +18,7 @@ WITH sales_external AS (
   WHERE ca.customertype = 'EXTERNAL'
   GROUP BY filial, sales_type, mesventa, catalog
 ),
+
 sales_own_subs AS (
   SELECT
     sia.SUBSIDIARYID AS filial,
@@ -33,6 +36,7 @@ sales_own_subs AS (
         AND sia.ITEMID       = ia.ITEMID
   GROUP BY filial, sales_type, mesventa, catalog
 ),
+
 sales_exe_agg AS (
   SELECT
     catalog,
@@ -42,6 +46,7 @@ sales_exe_agg AS (
   FROM sales_external
   GROUP BY catalog
 ),
+
 sales_own_agg AS (
   SELECT
     filial,
@@ -52,7 +57,7 @@ sales_own_agg AS (
   FROM sales_own_subs
   GROUP BY filial, catalog
 ),
--- 🔧 Agrega obsoletos al MISMO grano que vas a unir (filial + catálogo + tipo)
+
 obsoletos AS (
   SELECT
     dmfoe.SUBSIDIARYID AS filial,
@@ -69,8 +74,42 @@ obsoletos AS (
   WHERE dmfoe.UPLOADMONTH = '2025-08-31'
     AND dmfoe.STOCKQTY > 0
   GROUP BY dmfoe.SUBSIDIARYID, ia.COSTGROUP, ia.CATALOG
-)
+),
 
+nivel as (
+SELECT ia.SUBSIDIARYID, ia.ITEMID, "CATALOG" ,
+	CASE
+		WHEN (ia.ITEMID LIKE '%PH%') THEN NULL
+		WHEN
+			(ia.ITEMID LIKE '135%' AND ia."CATALOG" LIKE 'AAS F 400%') OR (ia.ITEMID LIKE '135%' AND ia."CATALOG" LIKE 'AAH F 400%') OR (ia.ITEMID LIKE '250%' AND ia."CATALOG" LIKE 'AAS F 400%') 
+			OR ia.ITEMID LIKE '251%'  OR ia."CATALOG" LIKE 'AAS U%'
+		THEN 'KFP'
+		WHEN
+			(ia.ITEMID LIKE '1%' OR ia.ITEMID LIKE '2%' OR ia.ITEMID LIKE '3%' OR ia.ITEMID LIKE '5%' OR ia.ITEMID LIKE '9%' 
+				OR (ia.ITEMID LIKE '6%' AND NOT (ia.ITEMID LIKE '67%' OR ia.ITEMID LIKE '68%' OR ia.ITEMID LIKE '69%')))
+			AND (ia."CATALOG" LIKE '%AAS%' OR ia."CATALOG" LIKE 'AAH%' OR ia."CATALOG" LIKE 'CEM%' OR ia."CATALOG" LIKE 'CEH%' OR ia."CATALOG" LIKE 'AEH%' OR ia."CATALOG" LIKE 'AEM%' OR ia."CATALOG" LIKE 'KA %' OR ia."CATALOG" LIKE 'KB %'OR ia."CATALOG" LIKE 'KC %' OR ia."CATALOG" LIKE 'KF %' OR ia."CATALOG" LIKE 'KV %')
+			AND NOT (ia."CATALOG" LIKE '%EXT%' OR ia."CATALOG" LIKE 'EXH%' OR ia."CATALOG" LIKE 'COM%' OR ia."CATALOG" LIKE 'ASP%' OR ia."CATALOG" LIKE 'CMH%' OR ia."CATALOG" LIKE 'ASH%' OR ia."CATALOG" LIKE 'AAM%' OR ia."CATALOG" LIKE 'ACM%' OR ia."CATALOG" LIKE 'ACH%' OR ia."CATALOG" LIKE 'KEXT%')
+			OR (ia.ITEMID LIKE '%AS%' OR ia.ITEMID LIKE '%PF%')
+		THEN 'FPR'
+		WHEN
+			(ia.ITEMID LIKE '1%' OR ia.ITEMID LIKE '2%' OR ia.ITEMID LIKE '3%' OR ia.ITEMID LIKE '5%' OR ia.ITEMID LIKE '9%'
+				OR (ia.ITEMID LIKE '6%' AND NOT (ia.ITEMID LIKE '67%' OR ia.ITEMID LIKE '68%' OR ia.ITEMID LIKE '69%')))
+			AND (ia."CATALOG" LIKE '%EXT%' OR ia."CATALOG" LIKE 'EXH%' OR ia."CATALOG" LIKE 'COM%' OR ia."CATALOG" LIKE 'ASP%' OR ia."CATALOG" LIKE 'CMH%' OR ia."CATALOG" LIKE 'ASH%' OR ia."CATALOG" LIKE 'AAM%' OR ia."CATALOG" LIKE 'ACM%' OR ia."CATALOG" LIKE 'ACH%' OR ia."CATALOG" LIKE 'KEXT%')
+			AND NOT (ia."CATALOG" LIKE '%AAS%' OR ia."CATALOG" LIKE 'AAH%' OR ia."CATALOG" LIKE 'CEM%' OR ia."CATALOG" LIKE 'CEH%' OR ia."CATALOG" LIKE 'AEH%' OR ia."CATALOG" LIKE 'AEM%' OR ia."CATALOG" LIKE 'KA %' OR ia."CATALOG" LIKE 'KB %'OR ia."CATALOG" LIKE 'KC %' OR ia."CATALOG" LIKE 'KF %' OR ia."CATALOG" LIKE 'KV %')
+			OR (ia.ITEMID LIKE '%AS%' OR ia.ITEMID LIKE '%PF%')
+		THEN 'NFP'
+		WHEN (ia."CATALOG" LIKE 'CSP%' OR ia."CATALOG" LIKE 'CSH%') THEN 'GRM'
+		WHEN
+			(ia.ITEMID LIKE '4%' OR ia.ITEMID LIKE '67%' OR ia.ITEMID LIKE '68%' OR ia.ITEMID LIKE '69%' OR ia.ITEMID LIKE '7%' OR ia.ITEMID LIKE '8%')
+			AND ia."CATALOG" NOT LIKE 'AAS%' AND ia."CATALOG" NOT LIKE 'CSP%' AND ia."CATALOG" NOT LIKE 'CSH%'
+		THEN 'RMA'
+	END AS 'LEVEL'
+FROM fersadv.Item_ALL ia
+LEFT JOIN fersadv.MarkingInstruction_ALL mia ON mia.ITEMID = ia.ITEMID
+WHERE SUBSIDIARYID ='FBEA'
+),
+
+resumen as(
 SELECT
   o.filial,
   o.catalog,
@@ -107,3 +146,8 @@ LEFT JOIN sales_exe_agg se
 LEFT JOIN sales_own_agg so
        ON so.filial  = o.filial
       AND so.catalog = o.catalog
+)
+
+select *
+from resumen
+where resumen.tipo in('PT','Commodity','Production','AUX','OTROS')
