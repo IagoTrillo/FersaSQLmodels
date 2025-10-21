@@ -169,16 +169,16 @@ LEFT JOIN sales_exe_agg se
        ON se.catalog = o.catalog
 join sales_from_date sfd
 on sfd.filial=o.filial
-join nivel n
+/*join nivel n
   on o.filial=n.subsidiaryid
-  and o.catalog=n.catalog
+  and o.catalog=n.catalog*/
 WHERE 
-  n.level in ('KFP','FPR')  
-  /*(
+  --n.level in ('KFP','FPR')  
+  (
     o.tipo IN ('PT','Commodity','Production','AUX','OTROS')
     OR o.tipo IS NULL
     OR TRIM(o.tipo) = ''
-  )*/
+  )
 GROUP BY o.filial, o.catalog, se.qty_10y, se.qty_4y,se.qty_hist,sfd.fromdate
 ORDER BY o.filial, o.catalog;
 
@@ -340,9 +340,7 @@ LEFT JOIN sales_own_agg so
       AND so.catalog = o.catalog
 ),
 
-/* ========= AÑADIDOS A PARTIR DE TU CTE `resumen` ========= */
-
-/* --- Obsoletos por ItemID con importes y brand --- */
+--- Obsoletos por ItemID con importes y brand --- 
 obso_items AS (
   SELECT
     dmfoe.SUBSIDIARYID AS filial,
@@ -375,21 +373,21 @@ obso_items AS (
   GROUP BY dmfoe.SUBSIDIARYID, ia.COSTGROUP, ia.CATALOG, dmfoe.ITEMID, ia.BRAND
 ),
 
-/* --- Stock total a repartir por catálogo (de tu `resumen`) --- */
+ --- Stock total a repartir por catálogo (de tu `resumen`) --- 
 to_allocate AS (
   SELECT
     r.filial,
     r.catalog,
     r.stock_tras_consumo_10y AS stock_to_allocate
   FROM resumen r
-  join nivel n
+  /*join nivel n
   on r.filial=n.subsidiaryid
-  and r.catalog=n.catalog
+  and r.catalog=n.catalog*/
   WHERE 
-  n.level in ('KFP','FPR')    
-  /*(r.catalog IN ('PT','Commodity','Production','AUX','OTROS')
+  --n.level in ('KFP','FPR')    
+  (r.tipo IN ('PT','Commodity','Production','AUX','OTROS')
       OR r.tipo IS NULL
-      OR TRIM(r.tipo) = '')*/
+      OR TRIM(r.tipo) = '')
     AND r.stock_tras_consumo_10y > 0
 ),
 
