@@ -113,10 +113,47 @@ SELECT ia.SUBSIDIARYID, ia.ITEMID, "CATALOG" ,
 			(ia.ITEMID LIKE '4%' OR ia.ITEMID LIKE '67%' OR ia.ITEMID LIKE '68%' OR ia.ITEMID LIKE '69%' OR ia.ITEMID LIKE '7%' OR ia.ITEMID LIKE '8%')
 			AND ia."CATALOG" NOT LIKE 'AAS%' AND ia."CATALOG" NOT LIKE 'CSP%' AND ia."CATALOG" NOT LIKE 'CSH%'
 		THEN 'RMA'
-	END AS 'LEVEL'
+	END AS lvl
 FROM fersadv.Item_ALL ia
 LEFT JOIN fersadv.MarkingInstruction_ALL mia ON mia.ITEMID = ia.ITEMID
 WHERE SUBSIDIARYID ='FBEA'
+),
+
+
+-- 1) Normalizamos lvl y calculamos prioridad
+nivel_prioridad AS (
+  SELECT
+    catalog,
+    COALESCE(NULLIF(lvl,''), '') AS lvl_norm,        -- '' para "en blanco"
+    CASE
+      WHEN lvl = 'KFP' THEN 1
+      WHEN lvl = 'FPR' THEN 2
+      WHEN lvl = 'NFP' THEN 3
+      WHEN lvl = 'RMA' THEN 4
+      ELSE 5                                         -- cualquier otro valor o blanco al final
+    END AS prio
+  FROM nivel
+),
+
+-- 2) Elegimos el mejor lvl por catalog
+nivel_catalog AS (
+  SELECT
+    catalog,
+    lvl_norm AS lvl_top,
+    ROW_NUMBER() OVER (
+      PARTITION BY catalog
+      ORDER BY prio, lvl_norm
+    ) AS rn
+  FROM nivel_prioridad
+),
+
+leveltop_catalog as (
+SELECT
+	catalog,
+	lvl_top
+FROM nivel_catalog
+WHERE rn = 1
+ORDER BY catalog
 ),
 
 resumen as(
@@ -157,35 +194,48 @@ LEFT JOIN sales_own_agg so
 SELECT
   o.filial                                        AS "SubsidiaryID",
   o.catalog                                       AS "Catalog",
+  ltc.lvl_top 									AS lvl_catalog,
+  o.tipo											AS cost_group,
   SUM(o.stockQ)                                   AS "StockQ obsoleto (catálogo)",
-  sfd.fromdate 									 as "SalesFromDate",
+  SUM(o.stock_eur)								AS "Stock€ obsoleto (catálogo)",
+  sfd.fromdate 									as "SalesFromDate",
   COALESCE(se.qty_hist, 0)                        AS "Ventas toda la historia (externas)",
   COALESCE(se.qty_10y, 0)                         AS "Ventas 10 años (externas)",
-    GREATEST(SUM(o.stockQ) - COALESCE(se.qty_10y, 0), 0)
+  GREATEST(SUM(o.stockQ) - COALESCE(se.qty_10y, 0), 0)
                                                   AS "Stock total a repartir",
+  (GREATEST(SUM(o.stockQ) - COALESCE(se.qty_10y, 0), 0))*SUM(o.stock_eur)/SUM(o.stockQ)
+                                                  AS "Stock€ total a repartir",                                        
   COALESCE(se.qty_4y,  0)                         AS "Ventas 4 años (externas)"
 FROM obsoletos o
 LEFT JOIN sales_exe_agg se
        ON se.catalog = o.catalog
-join sales_from_date sfd
+left join sales_from_date sfd
 on sfd.filial=o.filial
-/*join nivel n
-  on o.filial=n.subsidiaryid
-  and o.catalog=n.catalog*/
+left join leveltop_catalog ltc
+  on o.catalog=ltc.catalog
 WHERE 
-  --n.level in ('KFP','FPR')  
   (
-    o.tipo IN ('PT','Commodity','Production','AUX','OTROS')
-    OR o.tipo IS NULL
-    OR TRIM(o.tipo) = ''
+    -- Caso 1: n.lvl tiene valor no vacío ⇒ debe estar en ('KFP','FPR')
+    (ltc.lvl_top IS NOT NULL AND ltc.lvl_top <> '' AND ltc.lvl_top IN ('KFP','FPR'))
+    OR
+    -- Caso 2: n.lvl es NULL o vacío ⇒ aplicamos reglas sobre o.tipo
+    ((ltc.lvl_top IS NULL OR ltc.lvl_top = '')
+      AND (
+           o.tipo IS NULL
+           OR TRIM(o.tipo) = ''
+           OR o.tipo IN ('PT','Commodity','Production','AUX','OTROS')
+      )
+    )
   )
-GROUP BY o.filial, o.catalog, se.qty_10y, se.qty_4y,se.qty_hist,sfd.fromdate
+GROUP BY o.filial, o.catalog, ltc.lvl_top,o.tipo, se.qty_10y, se.qty_4y,se.qty_hist,sfd.fromdate
 ORDER BY o.filial, o.catalog;
 
 
 
 
-/*REPARTIR CANTIDADES A LIQUIDAR POR ITEM*/
+/*--------------------------------------------------
+ REPARTIR CANTIDADES A LIQUIDAR POR ITEM
+ ----------------------------------------------*/
 
 WITH
 
@@ -299,10 +349,46 @@ SELECT ia.SUBSIDIARYID, ia.ITEMID, "CATALOG" ,
 			(ia.ITEMID LIKE '4%' OR ia.ITEMID LIKE '67%' OR ia.ITEMID LIKE '68%' OR ia.ITEMID LIKE '69%' OR ia.ITEMID LIKE '7%' OR ia.ITEMID LIKE '8%')
 			AND ia."CATALOG" NOT LIKE 'AAS%' AND ia."CATALOG" NOT LIKE 'CSP%' AND ia."CATALOG" NOT LIKE 'CSH%'
 		THEN 'RMA'
-	END AS 'LEVEL'
+	END AS lvl
 FROM fersadv.Item_ALL ia
 LEFT JOIN fersadv.MarkingInstruction_ALL mia ON mia.ITEMID = ia.ITEMID
 WHERE SUBSIDIARYID ='FBEA'
+),
+
+-- 1) Normalizamos lvl y calculamos prioridad
+nivel_prioridad AS (
+  SELECT
+    catalog,
+    COALESCE(NULLIF(lvl,''), '') AS lvl_norm,        -- '' para "en blanco"
+    CASE
+      WHEN lvl = 'KFP' THEN 1
+      WHEN lvl = 'FPR' THEN 2
+      WHEN lvl = 'NFP' THEN 3
+      WHEN lvl = 'RMA' THEN 4
+      ELSE 5                                         -- cualquier otro valor o blanco al final
+    END AS prio
+  FROM nivel
+),
+
+-- 2) Elegimos el mejor lvl por catalog
+nivel_catalog AS (
+  SELECT
+    catalog,
+    lvl_norm AS lvl_top,
+    ROW_NUMBER() OVER (
+      PARTITION BY catalog
+      ORDER BY prio, lvl_norm
+    ) AS rn
+  FROM nivel_prioridad
+),
+
+leveltop_catalog as (
+SELECT
+	catalog,
+	lvl_top
+FROM nivel_catalog
+WHERE rn = 1
+ORDER BY catalog
 ),
 
 resumen as(
@@ -380,14 +466,23 @@ to_allocate AS (
     r.catalog,
     r.stock_tras_consumo_10y AS stock_to_allocate
   FROM resumen r
-  /*join nivel n
-  on r.filial=n.subsidiaryid
-  and r.catalog=n.catalog*/
-  WHERE 
-  --n.level in ('KFP','FPR')    
-  (r.tipo IN ('PT','Commodity','Production','AUX','OTROS')
-      OR r.tipo IS NULL
-      OR TRIM(r.tipo) = '')
+left join leveltop_catalog ltc
+  on r.catalog=ltc.catalog
+WHERE 
+  (
+	    -- Caso 1: n.lvl tiene valor no vacío ⇒ debe estar en ('KFP','FPR')
+	    (ltc.lvl_top IS NOT NULL AND ltc.lvl_top <> '' AND ltc.lvl_top IN ('KFP','FPR'))
+	    OR
+	    -- Caso 2: n.lvl es NULL o vacío ⇒ aplicamos reglas sobre o.tipo
+	    (
+	    (ltc.lvl_top IS NULL OR ltc.lvl_top = '')
+	      AND (
+	           r.tipo IS NULL
+	           OR TRIM(r.tipo) = ''
+	           OR r.tipo IN ('PT','Commodity','Production','AUX','OTROS')
+	      )
+	    )
+    )
     AND r.stock_tras_consumo_10y > 0
 ),
 
