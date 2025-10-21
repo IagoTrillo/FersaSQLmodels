@@ -232,10 +232,10 @@ ORDER BY o.filial, o.catalog;
 
 
 
-
-/*--------------------------------------------------
- REPARTIR CANTIDADES A LIQUIDAR POR ITEM
- ----------------------------------------------*/
+/* ==========================================================
+   REPARTO A ÍTEM CON TOPE = Stock Item - Ventas Externas 10y Item
+   (solo CTEs, basado en tu código base)  — FIX: itemid ambiguo
+   ========================================================== */
 
 WITH
 
@@ -256,6 +256,29 @@ sales_external AS (
         AND sia.ITEMID       = ia.ITEMID
   WHERE ca.customertype = 'EXTERNAL'
   GROUP BY filial, sales_type, mesventa, catalog
+),
+
+/* FIX AQUÍ: itemid totalmente calificado en SELECT y GROUP BY */
+sales_external_item AS (
+  SELECT
+    sia.SUBSIDIARYID                                   AS filial,
+    ia.catalog                                         AS catalog,
+    sia.ITEMID                                         AS itemid,
+    date_trunc('month', sia.invoicedate)::date         AS mesventa,
+    SUM(sia.INVOICEQTY)                                AS qty_item
+  FROM fersadv.SalesInvoices_ALL sia
+  LEFT JOIN fersadv.Customer_ALL ca
+         ON ca.SUBSIDIARYID = sia.SUBSIDIARYID
+        AND ca.CUSTOMERID   = sia.CUSTOMERID
+  LEFT JOIN fersadv.Item_ALL ia
+         ON sia.SUBSIDIARYID = ia.SUBSIDIARYID
+        AND sia.ITEMID       = ia.ITEMID
+  WHERE ca.customertype = 'EXTERNAL'
+  GROUP BY
+    sia.SUBSIDIARYID,
+    ia.catalog,
+    sia.ITEMID,
+    date_trunc('month', sia.invoicedate)::date
 ),
 
 sales_from_date as (
@@ -291,6 +314,17 @@ sales_exe_agg AS (
     SUM(CASE WHEN mesventa >= current_date - INTERVAL '10 years' THEN COALESCE(qty,0) ELSE 0 END)  AS qty_10y
   FROM sales_external
   GROUP BY catalog
+),
+
+/* Agregado de ventas EXTERNAS por ítem (10y) */
+sales_exe_item_agg AS (
+  SELECT
+    filial,
+    catalog,
+    itemid,
+    SUM(CASE WHEN mesventa >= current_date - INTERVAL '10 years' THEN COALESCE(qty_item,0) ELSE 0 END) AS qty_10y_item
+  FROM sales_external_item
+  GROUP BY filial, catalog, itemid
 ),
 
 sales_own_agg AS (
@@ -355,22 +389,19 @@ LEFT JOIN fersadv.MarkingInstruction_ALL mia ON mia.ITEMID = ia.ITEMID
 WHERE SUBSIDIARYID ='FBEA'
 ),
 
--- 1) Normalizamos lvl y calculamos prioridad
 nivel_prioridad AS (
   SELECT
     catalog,
-    COALESCE(NULLIF(lvl,''), '') AS lvl_norm,        -- '' para "en blanco"
+    COALESCE(NULLIF(lvl,''), '') AS lvl_norm,
     CASE
       WHEN lvl = 'KFP' THEN 1
       WHEN lvl = 'FPR' THEN 2
       WHEN lvl = 'NFP' THEN 3
       WHEN lvl = 'RMA' THEN 4
-      ELSE 5                                         -- cualquier otro valor o blanco al final
+      ELSE 5
     END AS prio
   FROM nivel
 ),
-
--- 2) Elegimos el mejor lvl por catalog
 nivel_catalog AS (
   SELECT
     catalog,
@@ -381,7 +412,6 @@ nivel_catalog AS (
     ) AS rn
   FROM nivel_prioridad
 ),
-
 leveltop_catalog as (
 SELECT
 	catalog,
@@ -426,21 +456,16 @@ LEFT JOIN sales_own_agg so
       AND so.catalog = o.catalog
 ),
 
---- Obsoletos por ItemID con importes y brand --- 
 obso_items AS (
   SELECT
     dmfoe.SUBSIDIARYID AS filial,
     ia.CATALOG         AS catalog,
     ia.COSTGROUP       AS tipo,
     dmfoe.ITEMID       AS itemid,
-    /* stock por ítem en obsoletos */
     SUM(dmfoe.STOCKQTY) AS stockQ_item,
-    /* importe a coste del ítem (EUR) */
     SUM(dmfoe.STOCKAMOUNT * dmfoe.CALCULATEDSDAMOUNT_EUR
         / NULLIF(dmfoe.CALCULATEDSDAMOUNT_LOCAL, 0)) AS stock_eur_item,
-    /* importe depreciado (EUR) */
     SUM(dmfoe.FINANCIALSDAMOUNT_EUR) AS deprec_eur_item,
-    /* coste unitario */
     CASE
       WHEN SUM(dmfoe.STOCKQTY) <> 0 THEN
         SUM(dmfoe.STOCKAMOUNT * dmfoe.CALCULATEDSDAMOUNT_EUR
@@ -448,7 +473,6 @@ obso_items AS (
         / NULLIF(SUM(dmfoe.STOCKQTY), 0)
       ELSE NULL
     END AS unit_cost_item,
-    /* ajusta si tu columna de marca se llama distinto */
     ia.BRAND AS brand
   FROM fersads.ds_MonthlyFinancialObsoletes_EDC dmfoe
   LEFT JOIN fersadv.item_all ia
@@ -459,35 +483,31 @@ obso_items AS (
   GROUP BY dmfoe.SUBSIDIARYID, ia.COSTGROUP, ia.CATALOG, dmfoe.ITEMID, ia.BRAND
 ),
 
- --- Stock total a repartir por catálogo (de tu `resumen`) --- 
 to_allocate AS (
   SELECT
     r.filial,
     r.catalog,
     r.stock_tras_consumo_10y AS stock_to_allocate
   FROM resumen r
-left join leveltop_catalog ltc
-  on r.catalog=ltc.catalog
+LEFT JOIN leveltop_catalog ltc
+  ON r.catalog=ltc.catalog
 WHERE 
   (
-	    -- Caso 1: n.lvl tiene valor no vacío ⇒ debe estar en ('KFP','FPR')
-	    (ltc.lvl_top IS NOT NULL AND ltc.lvl_top <> '' AND ltc.lvl_top IN ('KFP','FPR'))
-	    OR
-	    -- Caso 2: n.lvl es NULL o vacío ⇒ aplicamos reglas sobre o.tipo
-	    (
-	    (ltc.lvl_top IS NULL OR ltc.lvl_top = '')
-	      AND (
-	           r.tipo IS NULL
-	           OR TRIM(r.tipo) = ''
-	           OR r.tipo IN ('PT','Commodity','Production','AUX','OTROS')
-	      )
-	    )
+    (ltc.lvl_top IS NOT NULL AND ltc.lvl_top <> '' AND ltc.lvl_top IN ('KFP','FPR'))
+    OR
+    ((ltc.lvl_top IS NULL OR ltc.lvl_top = '')
+      AND (
+           r.tipo IS NULL
+           OR TRIM(r.tipo) = ''
+           OR r.tipo IN ('PT','Commodity','Production','AUX','OTROS')
+      )
     )
-    AND r.stock_tras_consumo_10y > 0
+  )
+  AND r.stock_tras_consumo_10y > 0
 ),
 
-/* --- Preparamos ranking; ahora LEFT JOIN para incluir catálogos sin reparto --- */
-items_ranked AS (
+/* Cálculo de tope por ítem = stock item - ventas externas 10y del ítem */
+item_caps AS (
   SELECT
     oi.filial,
     oi.catalog,
@@ -496,28 +516,32 @@ items_ranked AS (
     oi.stockQ_item,
     COALESCE(oi.unit_cost_item, 0) AS unit_cost_item,
     CASE WHEN CAST(oi.itemid AS VARCHAR) LIKE '%1001' THEN 1 ELSE 0 END AS ends_1001,
-    COALESCE(ta.stock_to_allocate, 0) AS stock_to_allocate
+    COALESCE(ta.stock_to_allocate, 0) AS stock_to_allocate,
+    COALESCE(sei.qty_10y_item, 0) AS qty_10y_item,
+    GREATEST(oi.stockQ_item - COALESCE(sei.qty_10y_item,0), 0) AS max_cap_item
   FROM obso_items oi
   LEFT JOIN to_allocate ta
          ON ta.filial  = oi.filial
         AND ta.catalog = oi.catalog
+  LEFT JOIN sales_exe_item_agg sei
+         ON sei.filial  = oi.filial
+        AND sei.catalog = oi.catalog
+        AND sei.itemid  = oi.itemid
 ),
 
-/* --- Suma acumulada previa en el orden de reparto (para todos los obsoletos) --- */
 calc AS (
   SELECT
-    ir.*,
+    ic.*,
     COALESCE(
-      SUM(ir.stockQ_item) OVER (
-        PARTITION BY ir.filial, ir.catalog
-        ORDER BY ir.ends_1001 ASC, ir.unit_cost_item DESC, ir.itemid
+      SUM(ic.max_cap_item) OVER (
+        PARTITION BY ic.filial, ic.catalog
+        ORDER BY ic.ends_1001 ASC, ic.unit_cost_item DESC, ic.itemid
         ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
       ), 0
-    ) AS cum_before
-  FROM items_ranked ir
+    ) AS cum_cap_before
+  FROM item_caps ic
 ),
 
-/* --- Reparto por ítem (puede ser 0) --- */
 reparto_final AS (
   SELECT
     c.filial,
@@ -526,43 +550,42 @@ reparto_final AS (
     c.brand,
     c.unit_cost_item                             AS unit_cost,
     c.stockQ_item                                AS stockQ_obsoleto,
-    /* Si no hay to_allocate para ese catálogo → 0 */
     c.stock_to_allocate                          AS stock_total_a_repartir,
-    LEAST(c.stockQ_item, GREATEST(0, c.stock_to_allocate - c.cum_before)) AS stock_repartido
+    LEAST(c.max_cap_item, GREATEST(0, c.stock_to_allocate - c.cum_cap_before)) AS stock_repartido
   FROM calc c
-  /* no hace falta join adicional, ya traemos todo en items_ranked */
 )
 
-/* --- TABLA FINAL: TODOS LOS ÍTEMS DE OBSOLETOS (repartan o no) --- */
 SELECT
   rf.filial                                     AS "SubsidiaryID",
-  sfd.fromdate as 'SalesFromDate',
-  rf.itemid                                     AS "ItemID",
-  rf.filial || ' - ' || rf.itemid               AS "Subsidiary - ItemID",
-  rf.catalog                                    AS "Catalog",
-  rf.brand                                      AS "Brand",
-  rf.stockQ_obsoleto                            AS "StockQ obsoleto",
-  /* Importes del obsoleto y depreciación desde obso_items */
-  oi.stock_eur_item                             AS "StockAmount obsoleto",
-  oi.deprec_eur_item                            AS "StockAmount depreciada en obsoletos",
-  rf.stock_total_a_repartir                     AS "Stock total a repartir",
-  (rf.stockQ_obsoleto - rf.stock_repartido)     AS "Stock no repartido",
-  (rf.stockQ_obsoleto - rf.stock_repartido) * COALESCE(rf.unit_cost, 0)
-                                                AS "Amount no repartido",
-  rf.stock_repartido                            AS "Stock repartido",
-  rf.stock_repartido * COALESCE(rf.unit_cost, 0)
-                                                AS "Amount repartido"
+  sfd.fromdate                                   AS 'SalesFromDate',
+  rf.itemid                                      AS "ItemID",
+  rf.filial || ' - ' || rf.itemid                AS "Subsidiary - ItemID",
+  rf.catalog                                     AS "Catalog",
+  rf.brand                                       AS "Brand",
+  rf.stockQ_obsoleto                              AS "StockQ obsoleto",
+  oi.stock_eur_item                               AS "StockAmount obsoleto",
+  oi.deprec_eur_item                              AS "StockAmount depreciada en obsoletos",
+  rf.stock_total_a_repartir                       AS "Stock total a repartir",
+  COALESCE(sei.qty_10y_item, 0) 					AS "External sales last 10y for this item",
+  (rf.stockQ_obsoleto - rf.stock_repartido)       AS "Stock no repartido",
+  (rf.stockQ_obsoleto - rf.stock_repartido) * COALESCE(rf.unit_cost, 0) AS "Amount no repartido",
+  rf.stock_repartido                              AS "Stock repartido",
+  rf.stock_repartido * COALESCE(rf.unit_cost, 0)  AS "Amount repartido"
 FROM reparto_final rf
 JOIN obso_items oi
   ON oi.filial  = rf.filial
  AND oi.catalog = rf.catalog
  AND oi.itemid  = rf.itemid
- join sales_from_date sfd
- on sfd.filial=oi.filial
+LEFT JOIN sales_from_date sfd
+  ON sfd.filial = rf.filial
+left join sales_exe_item_agg sei
+     ON sei.filial  = rf.filial
+    AND sei.catalog = rf.catalog
+    AND sei.itemid  = rf.itemid
 ORDER BY
   rf.filial,
   rf.catalog,
   CASE WHEN CAST(rf.itemid AS VARCHAR) LIKE '%1001' THEN 1 ELSE 0 END ASC,
   rf.unit_cost DESC,
-  rf.itemid;
-
+  rf.itemid
+;
