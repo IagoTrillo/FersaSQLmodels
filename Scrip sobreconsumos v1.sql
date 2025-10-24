@@ -93,8 +93,11 @@ LEFT JOIN BOM b
    AND c.ComponentItemID = b.ComponentItemID
 LEFT JOIN Trans t 
     ON c.ProdId = t.ProdId 
-   AND c.ComponentItemID = t.ItemID 
-   AND t.StatusIssue <> 0
+    AND c.ComponentItemID = t.ItemID 
+    AND t.StatusIssue <> 0
+left join fersadv.ProdTable_ALL pta
+    on pta.PRODID=c.ProdId
+    where pta.PRODSTATUS = 7
 GROUP BY
     c.ProdId,
     c.SubsidiaryID,
