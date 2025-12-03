@@ -1,0 +1,87 @@
+WITH InventoConEstado AS (
+    SELECT DISTINCT
+           isa.SUBSIDIARYID,
+           isa.INVENTSTATUSID,
+           isa.INVENTLOCATIONID,
+           CASE
+                -- 1) Subsidiarias con estado BLOCK => NC
+                WHEN isa.SUBSIDIARYID IN ('DLOK','DMUM','DPUN','DWDN')
+                     AND isa.INVENTSTATUSID = 'BLOCK'
+                THEN 'NC'
+
+                -- 2) FBEA en ZGZ con estados NC/Blocked => NC
+                WHEN isa.SUBSIDIARYID = 'FBEA'
+                     AND isa.INVENTLOCATIONID = 'ZGZ'
+                     AND isa.INVENTSTATUSID IN ('Blocked','NC','NC-Persona','NC-Proceso')
+                THEN 'NC'
+
+                -- 3) FJXN: ubicaciones conflictivas
+                WHEN isa.SUBSIDIARYID = 'FJXN'
+                     AND (
+                          (isa.INVENTSTATUSID = 'Available'
+                           AND isa.INVENTLOCATIONID IN ('NC','AB'))
+                          OR (isa.INVENTSTATUSID = 'NC'
+                              AND isa.INVENTLOCATIONID = 'JLC')
+                     )
+                THEN 'NC'
+
+                -- 4) FUSA en USA con Blocked/NC => NC
+                WHEN isa.SUBSIDIARYID = 'FUSA'
+                     AND isa.INVENTLOCATIONID = 'USA'
+                     AND isa.INVENTSTATUSID IN ('Blocked','NC')
+                THEN 'NC'
+
+                -- 5) NAUT bloqueado en NAUT => NC
+                WHEN isa.SUBSIDIARYID = 'NAUT'
+                     AND isa.INVENTLOCATIONID = 'NAUT'
+                     AND isa.INVENTSTATUSID = 'Blocked'
+                THEN 'NC'
+
+                -- 6) PUSA QRT_NLD => NC
+                WHEN isa.SUBSIDIARYID = 'PUSA'
+                     AND isa.INVENTSTATUSID = 'Available'
+                     AND isa.INVENTLOCATIONID = 'QRT_NLD'
+                THEN 'NC'
+
+                -- Resto de combinaciones => Available
+                ELSE 'Available'
+           END as ESTADO
+    FROM fersadv.InventSum_ALL isa
+),
+
+inventario as (
+	SELECT
+		isa.SUBSIDIARYID ,	
+		isa.ITEMID ,
+		isa.INVENTSTATUSID,
+		isa.INVENTLOCATIONID,
+		ie.ESTADO,
+		sum(isa.PHYSICALINVENT + isa.PICKED ) as Q,
+		sum(isa.EXCHANGERATE_EUR *isa.UNITCOST *(isa.PHYSICALINVENT + isa.PICKED)) as Amount
+	FROM fersadv.InventSum_ALL isa 
+	JOIN InventoConEstado ie
+		ON isa.SUBSIDIARYID = ie.SUBSIDIARYID
+	    AND isa.INVENTSTATUSID=ie.INVENTSTATUSID
+	    AND isa.INVENTLOCATIONID=ie.INVENTLOCATIONID
+	GROUP BY isa.SUBSIDIARYID,isa.ITEMID,ie.ESTADO,isa.INVENTSTATUSID,isa.INVENTLOCATIONID
+)
+
+SELECT
+dmfoe.SUBSIDIARYID,
+dmfoe.ITEMID ,
+inv.ESTADO,
+inv.INVENTLOCATIONID ,inv.INVENTSTATUSID ,
+sum(inv.Q) StockQtyNOK,
+sum(dmfoe.STOCKQTY  ) as 'stockQtyTotalItemNC(Obsol)',
+--sum(inv.Amount) StockAmountNOK,
+sum(inv.Q*dmfoe.CALCULATEDSDAMOUNT_EUR/dmfoe.STOCKQTY) StockAmountNOK,
+sum(dmfoe.CALCULATEDSDAMOUNT_EUR ) as 'stockAmountTotalItemNC(Obsol)',
+sum(dmfoe.FINANCIALSDAMOUNT_EUR ) as 'stockAmountTotalItemNC(ObsolDeprec)'
+FROM fersads.ds_MonthlyFinancialObsoletes_EDC dmfoe 
+LEFT JOIN inventario inv
+	ON inv.SUBSIDIARYID=dmfoe.SUBSIDIARYID 
+	AND inv.ITEMID=dmfoe.ITEMID 
+WHERE
+	dmfoe.UPLOADMONTH = '2025-10-31'
+	and inv.ESTADO='NC'
+GROUP BY dmfoe.SUBSIDIARYID, dmfoe.ITEMID ,inv.ESTADO, inv.INVENTLOCATIONID ,inv.INVENTSTATUSID 

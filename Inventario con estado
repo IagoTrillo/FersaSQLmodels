@@ -1,0 +1,52 @@
+WITH InventoConEstado AS (
+    SELECT DISTINCT
+           isa.SUBSIDIARYID,
+           isa.INVENTSTATUSID,
+           isa.INVENTLOCATIONID,
+           CASE
+                -- 1) Subsidiarias con estado BLOCK => NC
+                WHEN isa.SUBSIDIARYID IN ('DLOK','DMUM','DPUN','DWDN')
+                     AND isa.INVENTSTATUSID = 'BLOCK'
+                THEN 'NC'
+
+                -- 2) FBEA en ZGZ con estados NC/Blocked => NC
+                WHEN isa.SUBSIDIARYID = 'FBEA'
+                     AND isa.INVENTLOCATIONID = 'ZGZ'
+                     AND isa.INVENTSTATUSID IN ('Blocked','NC','NC-Persona','NC-Proceso')
+                THEN 'NC'
+
+                -- 3) FJXN: ubicaciones conflictivas
+                WHEN isa.SUBSIDIARYID = 'FJXN'
+                     AND (
+                          (isa.INVENTSTATUSID = 'Available'
+                           AND isa.INVENTLOCATIONID IN ('NC','AB','JLC'))
+                          OR (isa.INVENTSTATUSID = 'NC'
+                              AND isa.INVENTLOCATIONID = 'JLC')
+                     )
+                THEN 'NC'
+
+                -- 4) FUSA en USA con Blocked/NC => NC
+                WHEN isa.SUBSIDIARYID = 'FUSA'
+                     AND isa.INVENTLOCATIONID = 'USA'
+                     AND isa.INVENTSTATUSID IN ('Blocked','NC')
+                THEN 'NC'
+
+                -- 5) NAUT bloqueado en NAUT => NC
+                WHEN isa.SUBSIDIARYID = 'NAUT'
+                     AND isa.INVENTLOCATIONID = 'NAUT'
+                     AND isa.INVENTSTATUSID = 'Blocked'
+                THEN 'NC'
+
+                -- 6) PUSA QRT_NLD => NC
+                WHEN isa.SUBSIDIARYID = 'PUSA'
+                     AND isa.INVENTSTATUSID = 'Available'
+                     AND isa.INVENTLOCATIONID = 'QRT_NLD'
+                THEN 'NC'
+
+                -- Resto de combinaciones => Available
+                ELSE 'Available'
+           END as ESTADO
+    FROM fersadv.InventSum_ALL isa
+)
+SELECT *
+FROM InventoConEstado;
