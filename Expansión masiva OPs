@@ -1,0 +1,30 @@
+SELECT
+       rtca.REFID_PARENT  , rtca.PRODSTATUS_PARENT  ,rtca.LINE_PARENT , rtca.ITEMID_PARENT,
+       rtca.REQDATE_PARENT , rtca.DLVDATE_PARENT , rtca.FUTURESDATE_PARENT  ,
+       pta.qtysched,
+       rtca.ITEMID ,
+/*       case
+	       when rtca.itemid like '101%' then 'FGcone'
+	       when rtca.itemid like '102%' then 'FGcup'
+	       else 'assembly/others'
+	   end as tipo,*/
+       SUM(rtca.REALQTY) as QTY_ASIGNADA,
+       rtca.REFTYPENAME ,
+       case
+	       when rtca.REFTYPENAME like 'InventOnHand' or rtca.REFTYPENAME like 'TransferOrderReceive' then 'OK'
+	       else 'NOK'
+	   end as docOK,
+       rtca.REFID , rtca.REQDATE , rtca.FUTURESDATE
+from fersadw.ReqTransCoverage_ALL rtca 
+left join fersadv.ProdTable_ALL pta
+       on pta.prodid=rtca.REFID_PARENT
+where rtca.SUBSIDIARYID = 'FBEA'
+and rtca.GROUPREFTYPENAME = 'Production'
+and rtca.ITEMID NOT LIKE '67%' and rtca.ITEMID NOT LIKE '68%' and rtca.ITEMID NOT LIKE '69%' and rtca.ITEMID NOT LIKE '7%'
+--and rtca.REFID_PARENT ='26OPL01159'
+GROUP BY
+       rtca.REFID_PARENT  , rtca.PRODSTATUS_PARENT ,rtca.LINE_PARENT , rtca.ITEMID_PARENT,
+       rtca.REQDATE_PARENT , rtca.DLVDATE_PARENT , rtca.FUTURESDATE_PARENT  , pta.qtysched,
+       rtca.ITEMID , rtca.REFTYPENAME , rtca.REFID , rtca.REQDATE , rtca.FUTURESDATE
+       
+
