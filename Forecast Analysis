@@ -1,0 +1,281 @@
+WITH REQHIS AS (
+    SELECT 
+        rtah.*,
+        devf.*,
+        ia."CATALOG" AS catalog,
+        ia.FAMILYNAME,
+        ia.REQGROUPID AS GrCov
+    FROM fersahist.ReqTrans_ALL_HIST rtah 
+    LEFT JOIN fersads.ds_EnumValues_FER devf 
+        ON devf.ENUMITEMVALUE = rtah.REFTYPE 
+       AND devf.ENUMNAME = 'ReqRefType'
+    LEFT JOIN fersadv.Item_ALL ia 
+        ON ia.SUBSIDIARYID = rtah.SUBSIDIARYID 
+       AND ia.ITEMID = rtah.ITEMID 
+    WHERE rtah.SUBSIDIARYID = 'FBEA'
+),
+
+BASE AS (
+    SELECT
+        h.snapsot,
+        h.itemid,
+        MAX(h.catalog) AS catalog,
+        MAX(h.familyname) AS familyname,
+        SUM(h.qty) AS qty,
+        DATE_TRUNC('month', h.reqdate) AS req_month,
+        CASE 
+            WHEN DATEDIFF('month', h.snapsot, h.reqdate) < 0 THEN 0
+            ELSE DATEDIFF('month', h.snapsot, h.reqdate) + 1
+        END AS mes_n
+    FROM REQHIS h
+    WHERE h.qty < 0
+      AND h.inventlocationid = 'ZGZ'
+      AND DATE_TRUNC('year', h.snapsot) >= DATE '2025-01-01'
+      AND DAY(h.snapsot) BETWEEN 1 AND 12
+      AND (h.itemid LIKE '1%' OR h.itemid LIKE '2%' OR h.itemid LIKE '3%')
+      AND (h.GrCov LIKE '%PrT%' OR h.GrCov LIKE '%INT%' OR h.GrCov LIKE '%FAB%')
+    GROUP BY
+        h.snapsot,
+        h.itemid,
+        DATE_TRUNC('month', h.reqdate),
+        CASE 
+            WHEN DATEDIFF('month', h.snapsot, h.reqdate) < 0 THEN 0
+            ELSE DATEDIFF('month', h.snapsot, h.reqdate) + 1
+        END
+),
+
+REAL_CONS AS (
+    SELECT
+        spf.itemid,
+        DATE_TRUNC('month', spf.reqdate) AS sales_month,
+        SUM(spf.qty) AS real_qty,
+        SUM(spf.qty * spf.unitprice_eur) AS real_sales_amount,
+        SUM(spf.qty * spf.unitcost_eur) AS real_cost_amount
+    FROM fersadw.Stock_Projection_FACT spf
+    WHERE spf.qty < 0
+      AND spf.subsidiaryid = 'FBEA'
+      AND (spf.inventlocationid = 'ZGZ' OR spf.inventlocationid IS NULL)
+      AND spf.reftype NOT IN (43,45,35,21)
+    GROUP BY
+        spf.itemid,
+        DATE_TRUNC('month', spf.reqdate)
+),
+
+PRICES_MONTHLY AS (
+    SELECT
+        spf.itemid,
+        DATE_TRUNC('month', spf.reqdate) AS price_month,
+        SUM(spf.qty * spf.unitprice_eur) / NULLIF(SUM(spf.qty), 0) AS avg_price,
+        SUM(spf.qty * spf.unitcost_eur) / NULLIF(SUM(spf.qty), 0) AS avg_cost
+    FROM fersadw.Stock_Projection_FACT spf
+    WHERE spf.qty < 0
+      AND spf.subsidiaryid = 'FBEA'
+      AND spf.reftype NOT IN (43,45,35)
+      AND spf.unitprice_eur IS NOT NULL
+      AND spf.unitcost_eur IS NOT NULL
+    GROUP BY
+        spf.itemid,
+        DATE_TRUNC('month', spf.reqdate)
+),
+
+PRICES AS (
+    SELECT
+        b.itemid,
+        b.req_month,
+        pm.price_month,
+        pm.avg_price,
+        pm.avg_cost,
+        ROW_NUMBER() OVER (
+            PARTITION BY b.itemid, b.req_month
+            ORDER BY pm.price_month DESC
+        ) AS rn
+    FROM BASE b
+    LEFT JOIN PRICES_MONTHLY pm
+        ON pm.itemid = b.itemid
+       AND pm.price_month <= b.req_month
+),
+
+FORECAST_SISTEMA AS (
+    SELECT
+        h.snapsot,
+        h.itemid,
+        ROUND(SUM(h.qty) / 5, 2) AS forecast_sistema_medio_m5_m9
+    FROM REQHIS h
+    WHERE h.qty < 0
+      AND h.enumitemname = 'SalesForecast'
+      AND h.inventlocationid = 'ZGZ'
+      AND DAY(h.snapsot) BETWEEN 1 AND 12
+      AND (
+            CASE 
+                WHEN DATEDIFF('month', h.snapsot, h.reqdate) < 0 THEN 0
+                ELSE DATEDIFF('month', h.snapsot, h.reqdate) + 1
+            END
+          ) BETWEEN 5 AND 9
+    GROUP BY
+        h.snapsot,
+        h.itemid
+),
+
+BASE_FINAL AS (
+    SELECT
+        b.*,
+        p.avg_price,
+        p.avg_cost,
+        p.price_month AS price_used_month,
+
+        b.qty * p.avg_price AS forecast_sales_amount,
+        b.qty * p.avg_cost AS forecast_cost_amount,
+
+        COALESCE(r.real_qty, 0) AS real_qty,
+        COALESCE(r.real_sales_amount, 0) AS real_sales_amount,
+        COALESCE(r.real_cost_amount, 0) AS real_cost_amount,
+
+        b.qty - COALESCE(r.real_qty, 0) AS qty_diff,
+
+        fs.forecast_sistema_medio_m5_m9,
+
+        CASE 
+            WHEN b.req_month <= DATE_TRUNC('month', CURRENT_DATE) THEN 1 
+            ELSE 0 
+        END AS is_past,
+
+        CASE 
+            WHEN p.avg_price IS NULL THEN 1 ELSE 0 
+        END AS flag_missing_price,
+
+        DATEDIFF('month', p.price_month, b.req_month) AS months_price_lag
+
+    FROM BASE b
+    LEFT JOIN PRICES p
+        ON p.itemid = b.itemid
+       AND p.req_month = b.req_month
+       AND p.rn = 1
+    LEFT JOIN REAL_CONS r
+        ON r.itemid = b.itemid
+       AND r.sales_month = b.req_month
+    LEFT JOIN FORECAST_SISTEMA fs
+        ON fs.itemid = b.itemid
+       AND fs.snapsot = b.snapsot
+),
+
+RESUMEN AS (
+    SELECT
+        itemid,
+        catalog,
+        familyname,
+        snapsot,
+
+        MAX(forecast_sistema_medio_m5_m9) AS forecast_sistema_medio_m5_m9,
+
+        ROUND(SUM(CASE WHEN mes_n BETWEEN 0 AND 10 THEN qty ELSE 0 END) / 10, 2) AS mediaFcst_10_meses_qty,
+        ROUND(SUM(CASE WHEN mes_n BETWEEN 0 AND 3 THEN qty ELSE 0 END) / 3, 2) AS mediaFcst_q1_qty,
+        ROUND(SUM(CASE WHEN mes_n BETWEEN 4 AND 6 THEN qty ELSE 0 END) / 3, 2) AS mediaFcst_q2_qty,
+        ROUND(SUM(CASE WHEN mes_n BETWEEN 7 AND 9 THEN qty ELSE 0 END) / 3, 2) AS mediaFcst_q3_qty,
+        ROUND(SUM(CASE WHEN mes_n BETWEEN 0 AND 6 THEN qty ELSE 0 END) / 6, 2) AS mediaFcst_semestre_1_qty,
+
+        ROUND(SUM(CASE WHEN mes_n BETWEEN 0 AND 10 AND is_past = 1 THEN real_qty ELSE 0 END) / 10, 2) AS mediaReal_10_meses_qty,
+        ROUND(SUM(CASE WHEN mes_n BETWEEN 0 AND 3 AND is_past = 1 THEN real_qty ELSE 0 END) / 3, 2) AS mediaReal_q1_qty,
+        ROUND(SUM(CASE WHEN mes_n BETWEEN 4 AND 6 AND is_past = 1 THEN real_qty ELSE 0 END) / 3, 2) AS mediaReal_q2_qty,
+        ROUND(SUM(CASE WHEN mes_n BETWEEN 7 AND 9 AND is_past = 1 THEN real_qty ELSE 0 END) / 3, 2) AS mediaReal_q3_qty,
+        ROUND(SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 THEN real_qty ELSE 0 END) / 6, 2) AS mediaReal_semestre_1_qty,
+
+        ROUND(SUM(CASE WHEN mes_n BETWEEN 0 AND 10 AND is_past = 1 THEN qty_diff ELSE 0 END) / 10, 2) AS dif_10_meses_qty,
+        ROUND(SUM(CASE WHEN mes_n BETWEEN 0 AND 3 AND is_past = 1 THEN qty_diff ELSE 0 END) / 3, 2) AS dif_q1_qty,
+        ROUND(SUM(CASE WHEN mes_n BETWEEN 4 AND 6 AND is_past = 1 THEN qty_diff ELSE 0 END) / 3, 2) AS dif_q2_qty,
+        ROUND(SUM(CASE WHEN mes_n BETWEEN 7 AND 9 AND is_past = 1 THEN qty_diff ELSE 0 END) / 3, 2) AS dif_q3_qty,
+        ROUND(SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 THEN qty_diff ELSE 0 END) / 6, 2) AS dif_semestre_1_qty,
+
+        COUNT(DISTINCT CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 THEN mes_n END) AS meses_comparables_6m,
+
+        ROUND(
+            SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 THEN qty ELSE 0 END)
+            / NULLIF(COUNT(DISTINCT CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 THEN mes_n END), 0)
+        , 2) AS mediaFcst_6m_hasta_hoy_qty,
+
+        ROUND(
+            SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 THEN real_qty ELSE 0 END)
+            / NULLIF(COUNT(DISTINCT CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 THEN mes_n END), 0)
+        , 2) AS mediaReal_6m_hasta_hoy_qty,
+
+        ROUND(
+            SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 THEN qty_diff ELSE 0 END)
+            / NULLIF(COUNT(DISTINCT CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 THEN mes_n END), 0)
+        , 2) AS dif_6m_hasta_hoy_qty,
+
+        ROUND(SUM(avg_price * ABS(qty)) / NULLIF(SUM(ABS(qty)), 0), 2) AS avg_price,
+        ROUND(SUM(avg_cost * ABS(qty)) / NULLIF(SUM(ABS(qty)), 0), 2) AS avg_cost,
+
+        ROUND(MAX(avg_price), 2) AS last_price_snapshot,
+        ROUND(MAX(avg_cost), 2) AS last_cost_snapshot,
+
+        ROUND(SUM(real_sales_amount) / NULLIF(SUM(real_qty), 0), 2) AS real_unit_price,
+        ROUND(SUM(real_cost_amount) / NULLIF(SUM(real_qty), 0), 2) AS real_unit_cost,
+
+        MAX(flag_missing_price) AS flag_missing_price,
+        MAX(months_price_lag) AS max_months_price_lag,
+        ROUND(AVG(months_price_lag), 2) AS avg_months_price_lag,
+
+        SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 THEN ABS(real_sales_amount) ELSE 0 END) AS total_real_amount_6m,
+
+        SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 AND flag_missing_price = 0 THEN ABS(forecast_sales_amount) ELSE 0 END) AS total_forecast_amount_6m,
+
+        SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 AND flag_missing_price = 0 THEN ABS(real_sales_amount - forecast_sales_amount) ELSE 0 END) AS total_abs_error_6m,
+
+        SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 AND flag_missing_price = 0 THEN real_sales_amount - forecast_sales_amount ELSE 0 END) AS total_error_amount_6m,
+
+        SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 THEN ABS(real_qty) ELSE 0 END) AS total_real_qty_6m,
+        SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 THEN ABS(qty) ELSE 0 END) AS total_forecast_qty_6m,
+        SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 THEN ABS(real_qty - qty) ELSE 0 END) AS total_abs_error_qty_6m,
+
+        ROUND(
+            SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 AND flag_missing_price = 0 THEN real_sales_amount - forecast_sales_amount ELSE 0 END)
+        , 2) AS forecast_error_eur_6m,
+
+        ROUND(
+            SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 AND flag_missing_price = 0 THEN real_sales_amount - forecast_sales_amount ELSE 0 END)
+            / NULLIF(SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 AND flag_missing_price = 0 THEN ABS(real_sales_amount) ELSE 0 END), 0)
+        , 4) AS bias_pct_6m,
+
+        ROUND(
+            1 - (
+                SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 AND flag_missing_price = 0 THEN ABS(real_sales_amount - forecast_sales_amount) ELSE 0 END)
+                / NULLIF(SUM(CASE WHEN mes_n BETWEEN 0 AND 6 AND is_past = 1 AND flag_missing_price = 0 THEN ABS(real_sales_amount) ELSE 0 END), 0)
+            )
+        , 4) AS forecast_accuracy_6m,
+
+        ROUND(
+            1 - (
+                SUM(CASE WHEN mes_n = 1 AND is_past = 1 AND flag_missing_price = 0 THEN ABS(real_sales_amount - forecast_sales_amount) ELSE 0 END)
+                / NULLIF(SUM(CASE WHEN mes_n = 1 AND is_past = 1 AND flag_missing_price = 0 THEN ABS(real_sales_amount) ELSE 0 END), 0)
+            )
+        , 4) AS acc_m1,
+
+        ROUND(
+            1 - (
+                SUM(CASE WHEN mes_n = 3 AND is_past = 1 AND flag_missing_price = 0 THEN ABS(real_sales_amount - forecast_sales_amount) ELSE 0 END)
+                / NULLIF(SUM(CASE WHEN mes_n = 3 AND is_past = 1 AND flag_missing_price = 0 THEN ABS(real_sales_amount) ELSE 0 END), 0)
+            )
+        , 4) AS acc_m3,
+
+        ROUND(
+            1 - (
+                SUM(CASE WHEN mes_n = 6 AND is_past = 1 AND flag_missing_price = 0 THEN ABS(real_sales_amount - forecast_sales_amount) ELSE 0 END)
+                / NULLIF(SUM(CASE WHEN mes_n = 6 AND is_past = 1 AND flag_missing_price = 0 THEN ABS(real_sales_amount) ELSE 0 END), 0)
+            )
+        , 4) AS acc_m6
+
+    FROM BASE_FINAL
+    GROUP BY
+        itemid,
+        catalog,
+        familyname,
+        snapsot
+)
+
+SELECT *
+FROM RESUMEN
+ORDER BY    
+    familyname,    
+    catalog,
+    itemid,
+    snapsot;
