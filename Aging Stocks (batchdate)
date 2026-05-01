@@ -1,0 +1,96 @@
+WITH lotes_loc AS (
+    SELECT
+        iba.SUBSIDIARYID,
+        iba.ITEMID,
+        iba.INVENTBATCHID,
+        iba.INVENTLOCATIONID,
+        MAX(iba.DATEPHYSICAL) AS batchdate
+    FROM fersadv.ItemBatch_ALL iba
+    GROUP BY
+        iba.SUBSIDIARYID,
+        iba.ITEMID,
+        iba.INVENTBATCHID,
+        iba.INVENTLOCATIONID
+),
+lotes_item_batch AS (
+    SELECT
+        iba.SUBSIDIARYID,
+        iba.ITEMID,
+        iba.INVENTBATCHID,
+        MAX(iba.DATEPHYSICAL) AS batchdate
+    FROM fersadv.ItemBatch_ALL iba
+    GROUP BY
+        iba.SUBSIDIARYID,
+        iba.ITEMID,
+        iba.INVENTBATCHID
+),
+lotes_batch AS (
+    SELECT
+        iba.SUBSIDIARYID,
+        iba.INVENTBATCHID,
+        MAX(iba.DATEPHYSICAL) AS batchdate
+    FROM fersadv.ItemBatch_ALL iba
+    GROUP BY
+        iba.SUBSIDIARYID,
+        iba.INVENTBATCHID
+),
+dibsn_batch AS (
+    SELECT
+        dibsn.SUBSIDIARYID,
+        dibsn.BATCHID,
+        MAX(dibsn.PHYSICALDATE) AS batchdate
+    FROM FERSADS.ds_ItemBatch_SP_NKE dibsn
+    GROUP BY
+        dibsn.SUBSIDIARYID,
+        dibsn.BATCHID
+)
+SELECT
+    isa.SUBSIDIARYID,
+    isa.ITEMID,
+    isa.INVENTLOCATIONID,
+    isa.INVENTBATCHID,
+    COALESCE(
+        isa.BATCHDATE,
+        lo.batchdate,
+        lo2.batchdate,
+        lo3.batchdate,
+        dibsn.batchdate,
+        DATE '2100-01-01'
+    ) AS BATCHDATE,
+    SUM(COALESCE(isa.PHYSICALINVENT, 0) + COALESCE(isa.PICKED, 0)) AS STOCKQ,
+    AVG(isa.UNITCOST * isa.EXCHANGERATE_EUR) AS UNITCOST_EUR,
+    SUM(
+        (COALESCE(isa.PHYSICALINVENT, 0) + COALESCE(isa.PICKED, 0))
+        * isa.UNITCOST
+        * isa.EXCHANGERATE_EUR
+    ) AS STOCKAMOUNT
+FROM fersadv.InventSum_ALL isa
+LEFT JOIN lotes_loc lo
+    ON lo.SUBSIDIARYID = isa.SUBSIDIARYID
+   AND lo.ITEMID = isa.ITEMID
+   AND lo.INVENTBATCHID = isa.INVENTBATCHID
+   AND lo.INVENTLOCATIONID = isa.INVENTLOCATIONID
+LEFT JOIN lotes_item_batch lo2
+    ON lo2.SUBSIDIARYID = isa.SUBSIDIARYID
+   AND lo2.ITEMID = isa.ITEMID
+   AND lo2.INVENTBATCHID = isa.INVENTBATCHID
+LEFT JOIN lotes_batch lo3
+    ON lo3.SUBSIDIARYID = isa.SUBSIDIARYID
+   AND lo3.INVENTBATCHID = isa.INVENTBATCHID
+LEFT JOIN dibsn_batch dibsn
+    ON dibsn.SUBSIDIARYID = isa.SUBSIDIARYID
+   AND dibsn.BATCHID = isa.INVENTBATCHID
+GROUP BY
+    isa.SUBSIDIARYID,
+    isa.ITEMID,
+    isa.INVENTLOCATIONID,
+    isa.INVENTBATCHID,
+    COALESCE(
+        isa.BATCHDATE,
+        lo.batchdate,
+        lo2.batchdate,
+        lo3.batchdate,
+        dibsn.batchdate,
+        DATE '2100-01-01'
+    )
+HAVING SUM(COALESCE(isa.PHYSICALINVENT, 0) + COALESCE(isa.PICKED, 0)) > 0;
