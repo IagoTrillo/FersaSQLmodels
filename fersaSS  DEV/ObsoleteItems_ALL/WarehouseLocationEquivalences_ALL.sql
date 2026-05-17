@@ -19,16 +19,43 @@ WITH
 
    Estos campos representan el origen, es decir, los valores FROM.
    ============================================================ */
+
 SRC AS
 (
+    /* Registros reales */
     SELECT DISTINCT
         SUBSIDIARYID,
         INVENTLOCATIONID,
         INVENTLOCATIONIDTRANSIT,
         NAME
     FROM fersadv.WarehouseLocation_ALL
-),
 
+    UNION
+
+    /* Registro adicional por cada SUBSIDIARYID con INVENTLOCATIONID en blanco */
+    SELECT DISTINCT
+        SUBSIDIARYID,
+        NULL AS INVENTLOCATIONID,
+        NULL AS INVENTLOCATIONIDTRANSIT,
+        NULL AS NAME
+    FROM fersadv.WarehouseLocation_ALL
+    WHERE SUBSIDIARYID IS NOT NULL
+    
+    UNION ALL
+
+    /* Sociedades NOFER/PFI sin almacén en WarehouseLocation_ALL */
+    SELECT 'PARG' AS SUBSIDIARYID, NULL AS INVENTLOCATIONID, NULL AS INVENTLOCATIONIDTRANSIT, NULL AS NAME
+    UNION ALL
+    SELECT 'PCHI' AS SUBSIDIARYID, NULL AS INVENTLOCATIONID, NULL AS INVENTLOCATIONIDTRANSIT, NULL AS NAME
+    UNION ALL
+    SELECT 'PKEN' AS SUBSIDIARYID, NULL AS INVENTLOCATIONID, NULL AS INVENTLOCATIONIDTRANSIT, NULL AS NAME
+    UNION ALL
+    SELECT 'PBRA' AS SUBSIDIARYID, NULL AS INVENTLOCATIONID, NULL AS INVENTLOCATIONIDTRANSIT, NULL AS NAME
+	UNION ALL
+    SELECT 'PROT' AS SUBSIDIARYID, NULL AS INVENTLOCATIONID, NULL AS INVENTLOCATIONIDTRANSIT, NULL AS NAME
+	UNION ALL
+    SELECT 'PTUR' AS SUBSIDIARYID, NULL AS INVENTLOCATIONID, NULL AS INVENTLOCATIONIDTRANSIT, NULL AS NAME
+),
 
 /* ============================================================
    2. MATCHES
@@ -191,23 +218,22 @@ MATCHES AS
         - EXACT: igualdad exacta
         - PREFIX: empieza por el valor informado
         - GENERIC: fallback genérico */
-     AND (
-            R.INVENTLOCATIONID_FROM IS NULL
-
-         OR (
+    AND (
+            (
                 R.INVENTLOCATIONID_MATCHTYPE = 'EXACT'
-            AND R.INVENTLOCATIONID_FROM = S.INVENTLOCATIONID
-         )
+            AND R.INVENTLOCATIONID_FROM <=> S.INVENTLOCATIONID
+            )
 
-         OR (
+        OR (
                 R.INVENTLOCATIONID_MATCHTYPE = 'PREFIX'
+            AND R.INVENTLOCATIONID_FROM IS NOT NULL
             AND S.INVENTLOCATIONID LIKE R.INVENTLOCATIONID_FROM || '%'
-         )
+            )
 
-         OR (
+        OR (
                 R.INVENTLOCATIONID_MATCHTYPE = 'GENERIC'
-         )
-     )
+            )
+    )
 ),
 
 
