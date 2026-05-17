@@ -509,3 +509,13 @@ LEFT JOIN LAST6M LM
     ON HASH(LM.SUBSIDIARYID, LM.INVENTLOCATIONID, LM.ITEMID)
      = HASH(O.SUBSIDIARYID, O.INVENTLOCATIONID, O.ITEMID)
 ;
+
+GRANT SELECT
+ON fersaSS.ObsoleteItems_ALL
+TO usr_paula_carmona,
+   usr_juan_lanero;
+ 
+GRANT SELECT, INSERT, UPDATE, DELETE, ALTER
+ON fersaSS.ObsoleteItems_ALL
+TO usr_iago_trillo,
+   usr_alejandro_villen;

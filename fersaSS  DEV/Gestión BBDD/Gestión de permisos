@@ -1,0 +1,56 @@
+/*SELECT table_schema,
+       table_name,
+       owner_name
+FROM v_catalog.tables
+WHERE table_schema IN ('fersaSS', 'fersaSSTest')
+ORDER BY owner_name, table_name;
+*/
+
+--/*
+
+GRANT SELECT
+ON ALL TABLES IN SCHEMA fersaSS
+TO usr_paula_carmona,
+   usr_juan_lanero;
+GRANT SELECT, INSERT, UPDATE, DELETE, ALTER
+ON ALL TABLES IN SCHEMA fersaSS
+TO usr_iago_trillo,
+   usr_alejandro_villen;
+
+GRANT SELECT
+ON ALL TABLES IN SCHEMA fersaSSTest
+TO usr_paula_carmona,
+   usr_juan_lanero;
+GRANT SELECT, INSERT, UPDATE, DELETE, ALTER
+ON ALL TABLES IN SCHEMA fersaSSTest
+TO usr_iago_trillo,
+   usr_alejandro_villen;
+
+--*/
+
+
+
+/*
+ALTER TABLE fersaSS.ds_ExchangeRateFinancialMonthClosing
+OWNER TO usr_iago_trillo;
+
+ALTER TABLE fersaSS.ds_StockFinancialMonthClosing
+OWNER TO usr_iago_trillo;
+*/
+
+SELECT object_schema,
+       object_name,
+       object_type,
+       grantee,
+       privileges_description,
+       grantor
+FROM v_catalog.grants
+where (object_schema='fersaSS' or object_schema='fersaSSTest')
+and not
+	(grantee='usr_iago_trillo' and privileges_description = 'INSERT*, SELECT*, UPDATE*, DELETE*, ALTER*, REFERENCES*, DROP*, TRUNCATE*')
+and not
+	(grantee='usr_alejandro_villen' and privileges_description = 'INSERT, SELECT, UPDATE, DELETE, ALTER, TRUNCATE')
+and not
+	(grantee='usr_paula_carmona'and privileges_description = 'SELECT')
+and not
+	(grantee='usr_juan_lanero'and privileges_description = 'SELECT');
