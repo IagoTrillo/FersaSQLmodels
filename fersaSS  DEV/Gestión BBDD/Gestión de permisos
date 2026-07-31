@@ -10,21 +10,21 @@ ORDER BY owner_name, table_name;
 
 GRANT SELECT
 ON ALL TABLES IN SCHEMA fersaSS
-TO usr_paula_carmona,
-   usr_juan_lanero;
-GRANT SELECT, INSERT, UPDATE, DELETE, ALTER
+TO usr_juan_lanero, usr_vert_pwbi;
+GRANT SELECT, INSERT, UPDATE, DELETE, ALTER, TRUNCATE
 ON ALL TABLES IN SCHEMA fersaSS
 TO usr_iago_trillo,
-   usr_alejandro_villen;
+   usr_alejandro_villen,
+   usr_paula_carmona;
 
 GRANT SELECT
 ON ALL TABLES IN SCHEMA fersaSSTest
-TO usr_paula_carmona,
-   usr_juan_lanero;
-GRANT SELECT, INSERT, UPDATE, DELETE, ALTER
+TO usr_juan_lanero, usr_vert_pwbi;
+GRANT SELECT, INSERT, UPDATE, DELETE, ALTER, TRUNCATE
 ON ALL TABLES IN SCHEMA fersaSSTest
 TO usr_iago_trillo,
-   usr_alejandro_villen;
+   usr_alejandro_villen,
+   usr_paula_carmona;
 
 --*/
 
@@ -43,6 +43,7 @@ SELECT object_schema,
        object_type,
        grantee,
        privileges_description,
+       owner,
        grantor
 FROM v_catalog.grants
 where (object_schema='fersaSS' or object_schema='fersaSSTest')
@@ -54,3 +55,90 @@ and not
 	(grantee='usr_paula_carmona'and privileges_description = 'SELECT')
 and not
 	(grantee='usr_juan_lanero'and privileges_description = 'SELECT');
+
+
+
+
+-- Para edicion
+DO LANGUAGE PLvSQL $$
+DECLARE
+    v_schema VARCHAR;
+    v_table  VARCHAR;
+BEGIN
+    FOR v_schema, v_table IN QUERY
+        SELECT table_schema, table_name
+        FROM v_catalog.tables
+        WHERE table_schema = 'fersaSS'
+          AND is_system_table = false
+    LOOP
+        PERFORM EXECUTE
+            'GRANT SELECT, INSERT, UPDATE, DELETE, ALTER, TRUNCATE ' ||
+            'ON TABLE ' ||
+            QUOTE_IDENT(v_schema) || '.' || QUOTE_IDENT(v_table) ||
+            ' TO usr_iago_trillo, usr_alejandro_villen, usr_paula_carmona ' ||
+            'WITH GRANT OPTION';
+    END LOOP;
+END;
+$$;
+
+--Para solo lectura
+DO LANGUAGE PLvSQL $$
+DECLARE
+    v_schema VARCHAR;
+    v_table  VARCHAR;
+BEGIN
+    FOR v_schema, v_table IN QUERY
+        SELECT table_schema, table_name
+        FROM v_catalog.tables
+        WHERE table_schema = 'fersaSS'
+          AND is_system_table = false
+    LOOP
+        PERFORM EXECUTE
+            'GRANT SELECT ON TABLE ' ||
+            QUOTE_IDENT(v_schema) || '.' || QUOTE_IDENT(v_table) ||
+            ' TO usr_juan_lanero, usr_vert_pwbi';
+    END LOOP;
+END;
+$$;
+
+-- Para edicion
+DO LANGUAGE PLvSQL $$
+DECLARE
+    v_schema VARCHAR;
+    v_table  VARCHAR;
+BEGIN
+    FOR v_schema, v_table IN QUERY
+        SELECT table_schema, table_name
+        FROM v_catalog.tables
+        WHERE table_schema = 'fersaSSTest'
+          AND is_system_table = false
+    LOOP
+        PERFORM EXECUTE
+            'GRANT SELECT, INSERT, UPDATE, DELETE, ALTER, TRUNCATE ' ||
+            'ON TABLE ' ||
+            QUOTE_IDENT(v_schema) || '.' || QUOTE_IDENT(v_table) ||
+            ' TO usr_iago_trillo, usr_alejandro_villen, usr_paula_carmona ' ||
+            'WITH GRANT OPTION';
+    END LOOP;
+END;
+$$;
+
+--Para solo lectura
+DO LANGUAGE PLvSQL $$
+DECLARE
+    v_schema VARCHAR;
+    v_table  VARCHAR;
+BEGIN
+    FOR v_schema, v_table IN QUERY
+        SELECT table_schema, table_name
+        FROM v_catalog.tables
+        WHERE table_schema = 'fersaSSTest'
+          AND is_system_table = false
+    LOOP
+        PERFORM EXECUTE
+            'GRANT SELECT ON TABLE ' ||
+            QUOTE_IDENT(v_schema) || '.' || QUOTE_IDENT(v_table) ||
+            ' TO usr_juan_lanero, usr_vert_pwbi';
+    END LOOP;
+END;
+$$;

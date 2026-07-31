@@ -52,7 +52,7 @@ sales_own_agg AS (
   FROM sales_own_subs
   GROUP BY filial, catalog
 ),
--- 🔧 Agrega obsoletos al MISMO grano que vas a unir (filial + catálogo + tipo)
+
 obsoletos AS (
   SELECT
     dmfoe.SUBSIDIARYID AS filial,
